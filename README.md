@@ -44,8 +44,56 @@ sudo apt update
 curl -fsSL https://deb.nodesource.com/setup_16.x | sudo -E bash -
 sudo apt install -y nodejs
 
-# 安装unzip（用于解压Chrome）
-sudo apt install -y unzip
+# 安装防火墙
+sudo apt install -y ufw
+
+# 配置防火墙规则
+sudo ufw allow ssh # 确保SSH连接不会断开
+sudo ufw allow 9222/tcp # 允许远程调试端口
+sudo ufw enable # 启用防火墙
+
+# 安装Chrome运行所需的系统依赖
+sudo apt install -y \
+    unzip \
+    ca-certificates \
+    fonts-liberation \
+    libasound2 \
+    libatk-bridge2.0-0 \
+    libatk1.0-0 \
+    libc6 \
+    libcairo2 \
+    libcups2 \
+    libdbus-1-3 \
+    libexpat1 \
+    libfontconfig1 \
+    libgbm1 \
+    libgcc-s1 \
+    libglib2.0-0 \
+    libgtk-3-0 \
+    libnspr4 \
+    libnss3 \
+    libpango-1.0-0 \
+    libpangocairo-1.0-0 \
+    libstdc++6 \
+    libx11-6 \
+    libx11-xcb1 \
+    libxcb1 \
+    libxcomposite1 \
+    libxcursor1 \
+    libxdamage1 \
+    libxext6 \
+    libxfixes3 \
+    libxi6 \
+    libxrandr2 \
+    libxrender1 \
+    libxss1 \
+    libxtst6 \
+    lsb-release \
+    xdg-utils \
+    libgdk-pixbuf2.0-0 \
+    libgtk2.0-0 \
+    libxshmfence1 \
+    libdrm2
 
 # 安装项目依赖
 cd browser-automation
@@ -77,8 +125,32 @@ pm2 start browser.js --name "browser-automation" --env VPS=true
 
 ### 3. 远程访问（VPS模式）
 
-1. 确保VPS的9222端口已开放
+1. 确保防火墙和安全组配置正确：
+   ```bash
+   # 检查防火墙状态
+   sudo ufw status
+   
+   # 如果9222端口没有开放，执行：
+   sudo ufw allow 9222/tcp
+   
+   # 对于使用云服务的VPS，还需要在控制台中：
+   # - AWS: 在安全组中添加入站规则，允许9222端口
+   # - Google Cloud: 在防火墙规则中允许9222端口
+   # - Azure: 在网络安全组中添加入站规则
+   # - 阿里云/腾讯云: 在安全组规则中添加9222端口
+   ```
+
 2. 在本地浏览器访问：`http://你的VPS-IP:9222`
+   - 如果无法访问，可以尝试：
+     ```bash
+     # 检查9222端口是否正在监听
+     netstat -tuln | grep 9222
+     
+     # 如果需要，重启Chrome实例
+     pkill chrome
+     VPS=true node browser.js
+     ```
+
 3. 点击页面上的链接即可远程控制浏览器
 
 ## 自动Chrome下载说明
@@ -143,6 +215,25 @@ pm2 restart browser-automation # 重启程序
    - 检查9222端口是否开放
    - 确认VPS防火墙设置
    - 验证VPS模式是否正确启用
+
+4. 系统服务问题：
+   如果遇到系统服务相关错误，请执行以下步骤：
+   ```bash
+   # 重启必要的系统服务
+   sudo systemctl restart dbus.service
+   sudo systemctl restart networkd-dispatcher.service
+   sudo systemctl restart polkit.service
+   sudo systemctl restart unattended-upgrades.service
+
+   # 重新安装核心包
+   sudo apt install -y dbus policykit-1 networkd-dispatcher unattended-upgrades
+
+   # 更新系统
+   sudo apt update
+   sudo apt upgrade -y
+   sudo apt autoremove -y
+   sudo apt clean
+   ```
 
 ## 更新日志
 
