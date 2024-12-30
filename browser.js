@@ -1,201 +1,101 @@
 /**
  * 浏览器自动化脚本
- * 
- * 作者: 小林
- * Twitter: @YOYOMYOYOA (https://x.com/YOYOMYOYOA)
- * 版本: v1.0
- * 
- * 功能:
- * - 支持代理服务器
- * - 支持Chrome插件安装和使用
- * - 自动错误恢复和重启
- * - 支持远程调试
- * - 可在VPS上长期运行
- * - 自动下载和配置Chrome浏览器
+ * 作者: 小林 - @YOYOMYOYOA
  */
 
-const puppeteer = require('puppeteer-extra');
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-const { HttpsProxyAgent } = require('https-proxy-agent');
+const puppeteer = require('puppeteer');
+const { spawn, execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { execSync, spawn } = require('child_process');
-const https = require('https');
-const http = require('http');
+const readline = require('readline');
 
-// 使用 Stealth 插件来避免被检测
-puppeteer.use(StealthPlugin());
+// 代理配置文件路径
+const PROXY_CONFIG_PATH = path.join(__dirname, 'proxy-config.json');
 
-// 状态提示函数
-function showStatus(message, isError = false) {
-    const timestamp = new Date().toLocaleString();
-    const prefix = isError ? '❌ 错误' : '✅ 信息';
-    console.log(`[${timestamp}] ${prefix}: ${message}`);
-}
-
-// 创建调试页面服务器
-function createDebugServer() {
-    const server = http.createServer((req, res) => {
-        if (req.url === '/') {
-            res.writeHead(200, { 'Content-Type': 'text/html' });
-            res.end(`
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <title>Chrome远程调试</title>
-                    <meta charset="utf-8">
-                    <style>
-                        body { font-family: Arial, sans-serif; margin: 20px; }
-                        .container { max-width: 800px; margin: 0 auto; }
-                        .header { background: #f5f5f5; padding: 20px; border-radius: 5px; margin-bottom: 20px; }
-                        .tabs { display: flex; gap: 20px; margin-bottom: 20px; }
-                        .tab { padding: 10px 20px; cursor: pointer; border: none; background: #007bff; color: white; border-radius: 5px; }
-                        .content { background: white; padding: 20px; border-radius: 5px; }
-                        #debugLinks { list-style: none; padding: 0; }
-                        #debugLinks li { margin: 10px 0; }
-                        #debugLinks a { color: #007bff; text-decoration: none; }
-                        #debugLinks a:hover { text-decoration: underline; }
-                    </style>
-                </head>
-                <body>
-                    <div class="container">
-                        <div class="header">
-                            <h1>Chrome远程调试控制台</h1>
-                            <p>作者: 小林 - <a href="https://x.com/YOYOMYOYOA" target="_blank">@YOYOMYOYOA</a></p>
-                        </div>
-                        <div class="content">
-                            <div id="loading">正在加载可用的调试目标...</div>
-                            <ul id="debugLinks"></ul>
-                        </div>
-                    </div>
-                    <script>
-                        async function updateDebugLinks() {
-                            try {
-                                const response = await fetch('/json');
-                                const targets = await response.json();
-                                const linksList = document.getElementById('debugLinks');
-                                const loading = document.getElementById('loading');
-                                
-                                loading.style.display = 'none';
-                                linksList.innerHTML = '';
-                                
-                                targets.forEach(target => {
-                                    if (target.type === 'page') {
-                                        const li = document.createElement('li');
-                                        const a = document.createElement('a');
-                                        a.href = target.devtoolsFrontendUrl;
-                                        a.textContent = target.title || target.url;
-                                        a.target = '_blank';
-                                        li.appendChild(a);
-                                        linksList.appendChild(li);
-                                    }
-                                });
-                            } catch (error) {
-                                document.getElementById('loading').textContent = '加载失败，请刷新页面重试';
-                            }
-                        }
-                        
-                        updateDebugLinks();
-                        setInterval(updateDebugLinks, 5000);
-                    </script>
-                </body>
-                </html>
-            `);
-        } else if (req.url === '/json' || req.url === '/json/version' || req.url.startsWith('/json/list')) {
-            // 转发调试API请求到Chrome
-            const options = {
-                hostname: 'localhost',
-                port: 9222,
-                path: req.url,
-                method: 'GET'
-            };
-            
-            const debugReq = http.request(options, (debugRes) => {
-                res.writeHead(debugRes.statusCode, debugRes.headers);
-                debugRes.pipe(res);
-            });
-            
-            debugReq.on('error', (error) => {
-                res.writeHead(500);
-                res.end(JSON.stringify({ error: error.message }));
-            });
-            
-            debugReq.end();
-        } else {
-            res.writeHead(404);
-            res.end('Not Found');
+// 读取代理配置
+function loadProxyConfig() {
+    try {
+        if (fs.existsSync(PROXY_CONFIG_PATH)) {
+            const config = JSON.parse(fs.readFileSync(PROXY_CONFIG_PATH, 'utf8'));
+            return config;
         }
-    });
-
-    server.listen(9222, '0.0.0.0', () => {
-        showStatus('调试服务器已启动在端口 9222');
-    });
-
-    return server;
+    } catch (error) {
+        console.error('读取代理配置失败:', error);
+    }
+    return null;
 }
 
-// Chrome下载和安装
-async function setupChrome() {
-    const chromePath = path.join(__dirname, 'chrome-linux');
-    const chromeExecutable = path.join(chromePath, 'chrome');
-
-    // 如果Chrome已经存在，直接返回路径
-    if (fs.existsSync(chromeExecutable)) {
-        showStatus('Chrome已存在，跳过下载');
-        return chromeExecutable;
+// 保存代理配置
+function saveProxyConfig(config) {
+    try {
+        fs.writeFileSync(PROXY_CONFIG_PATH, JSON.stringify(config, null, 2));
+        console.log('代理配置已保存');
+    } catch (error) {
+        console.error('保存代理配置失败:', error);
     }
+}
 
-    showStatus('开始下载Chrome浏览器...');
-    
-    // 下载Chrome
-    const downloadUrl = 'https://storage.googleapis.com/chromium-browser-snapshots/Linux_x64/1002410/chrome-linux.zip';
-    const zipPath = path.join(__dirname, 'chrome-linux.zip');
+// 交互式配置代理
+async function configureProxy() {
+    const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout
+    });
+
+    const question = (query) => new Promise((resolve) => rl.question(query, resolve));
 
     try {
-        await new Promise((resolve, reject) => {
-            const file = fs.createWriteStream(zipPath);
-            let downloadedBytes = 0;
-            
-            https.get(downloadUrl, (response) => {
-                const totalBytes = parseInt(response.headers['content-length'], 10);
-                
-                response.on('data', (chunk) => {
-                    downloadedBytes += chunk.length;
-                    const progress = ((downloadedBytes / totalBytes) * 100).toFixed(2);
-                    process.stdout.write(`\r下载进度: ${progress}% (${(downloadedBytes/1024/1024).toFixed(2)}MB/${(totalBytes/1024/1024).toFixed(2)}MB)`);
-                });
-                
-                response.pipe(file);
-                file.on('finish', () => {
-                    process.stdout.write('\n');
-                    file.close();
-                    resolve();
-                });
-            }).on('error', reject);
-        });
-
-        showStatus('Chrome下载完成，开始解压...');
-        execSync(`unzip -o ${zipPath} -d ${__dirname}`);
-        showStatus('Chrome解压完成');
+        console.log('\n=== 代理服务器配置 ===');
         
-        // 设置执行权限
-        execSync(`chmod +x ${chromeExecutable}`);
-        showStatus('Chrome权限设置完成');
-        
-        // 清理zip文件
-        fs.unlinkSync(zipPath);
-        showStatus('清理临时文件完成');
+        // 检查是否有保存的配置
+        const savedConfig = loadProxyConfig();
+        if (savedConfig) {
+            const useExisting = await question('检测到已保存的代理配置，是否使用？(y/n) ');
+            if (useExisting.toLowerCase() === 'y') {
+                rl.close();
+                return savedConfig;
+            }
+        }
 
-        return chromeExecutable;
+        const config = {
+            server: await question('请输入代理服务器地址(例如: 127.0.0.1:8080): '),
+            username: await question('请输入代理用户名: '),
+            password: await question('请输入代理密码: ')
+        };
+
+        const save = await question('是否保存此配置？(y/n) ');
+        if (save.toLowerCase() === 'y') {
+            saveProxyConfig(config);
+        }
+
+        rl.close();
+        return config;
     } catch (error) {
-        showStatus(`Chrome安装失败: ${error.message}`, true);
+        rl.close();
         throw error;
     }
 }
 
 // 启动Xvfb
 function startXvfb() {
-    showStatus('正在启动虚拟显示服务...');
+    console.log('启动虚拟显示服务...');
+    
+    // 检查Xvfb是否已安装
+    try {
+        execSync('which Xvfb');
+    } catch (error) {
+        console.log('安装Xvfb和依赖...');
+        execSync('sudo apt-get update && sudo apt-get install -y xvfb x11-xkb-utils xfonts-100dpi xfonts-75dpi xfonts-scalable xfonts-cyrillic x11-apps');
+    }
+    
+    // 确保没有其他Xvfb实例在运行
+    try {
+        execSync('pkill -f "Xvfb :99"');
+        execSync('rm -f /tmp/.X99-lock');
+    } catch (error) {
+        // 忽略错误
+    }
+    
     const xvfb = spawn('Xvfb', [
         ':99',
         '-screen', '0', '1920x1080x24',
@@ -203,15 +103,11 @@ function startXvfb() {
     ]);
 
     xvfb.stdout.on('data', (data) => {
-        showStatus(`Xvfb输出: ${data}`);
+        console.log(`Xvfb输出: ${data}`);
     });
 
     xvfb.stderr.on('data', (data) => {
-        showStatus(`Xvfb错误: ${data}`, true);
-    });
-
-    xvfb.on('close', (code) => {
-        showStatus(`Xvfb进程退出，代码: ${code}`, true);
+        console.error(`Xvfb错误: ${data}`);
     });
 
     // 设置DISPLAY环境变量
@@ -220,193 +116,113 @@ function startXvfb() {
     return xvfb;
 }
 
-async function createBrowser(proxyServer = '') {
-    showStatus('正在初始化浏览器配置...');
+async function createBrowser(proxyConfig) {
+    const userDataDir = path.join(__dirname, 'chrome-user-data');
     
+    // 创建用户数据目录
+    if (!fs.existsSync(userDataDir)) {
+        fs.mkdirSync(userDataDir, { recursive: true });
+    }
+
     const options = {
-        headless: 'new',  // 使用新版无头模式
+        headless: false,
+        userDataDir: userDataDir,
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--start-maximized',
             '--disable-infobars',
             '--window-size=1920,1080',
-            '--start-maximized',
-            '--enable-extensions',
-            '--disable-extensions-http-throttling',
+            '--disable-gpu',
             '--remote-debugging-port=9222',
             '--remote-debugging-address=0.0.0.0',
-            '--disable-dev-shm-usage',
-            '--disable-gpu',
-            '--no-zygote',
-            '--single-process',
-            '--disable-web-security',
-            '--allow-running-insecure-content',
-            '--disable-features=IsolateOrigins,site-per-process',
-            '--disable-blink-features=AutomationControlled'
+            '--disable-web-security'
         ],
-        defaultViewport: {
-            width: 1920,
-            height: 1080
-        },
-        ignoreDefaultArgs: [
-            '--enable-automation',
-            '--disable-extensions'
-        ]
+        defaultViewport: null
     };
 
-    // VPS模式配置
+    // 添加代理服务器配置
+    if (proxyConfig && proxyConfig.server) {
+        options.args.push(`--proxy-server=http://${proxyConfig.server}`);
+        console.log('已配置代理服务器:', proxyConfig.server);
+    }
+
+    // VPS环境使用系统Chrome
     if (process.env.VPS === 'true') {
-        showStatus('VPS模式已启用');
-        try {
-            const chromePath = await setupChrome();
-            options.executablePath = chromePath;
-            showStatus(`Chrome路径配置完成: ${chromePath}`);
-            
-            // 创建用户数据目录
-            const userDataDir = path.join(__dirname, 'chrome-user-data');
-            if (!fs.existsSync(userDataDir)) {
-                fs.mkdirSync(userDataDir, { recursive: true });
-            }
-            options.userDataDir = userDataDir;
-            showStatus(`用户数据目录配置完成: ${userDataDir}`);
-        } catch (error) {
-            showStatus('Chrome配置失败', true);
-            throw error;
-        }
+        options.executablePath = '/usr/bin/google-chrome';
+        console.log('使用系统Chrome');
     }
 
-    // 代理服务器配置
-    if (proxyServer) {
-        showStatus(`正在配置代理服务器: ${proxyServer}`);
-        options.args.push(`--proxy-server=${proxyServer}`);
+    console.log('启动Chrome浏览器...');
+    const browser = await puppeteer.launch(options);
+    console.log('Chrome浏览器启动成功');
+    
+    const page = await browser.newPage();
+    console.log('创建新页面成功');
+
+    // 设置代理认证
+    if (proxyConfig && proxyConfig.username && proxyConfig.password) {
+        await page.authenticate({
+            username: proxyConfig.username,
+            password: proxyConfig.password
+        });
+        console.log('设置代理认证完成');
     }
 
+    // 设置用户代理
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+
+    // 打开Chrome商店
+    console.log('正在打开Chrome商店...');
     try {
-        showStatus('正在启动浏览器...');
-        const browser = await puppeteer.launch(options);
-        const page = await browser.newPage();
-
-        // 设置代理认证
-        if (proxyServer) {
-            await page.authenticate({
-                username: 'OR873990528',
-                password: '3de1fa1'
-            });
-            showStatus('代理认证配置完成');
-        }
-
-        // 注入反检测脚本
-        await page.evaluateOnNewDocument(() => {
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
-            window.chrome = {
-                runtime: {}
-            };
+        await page.goto('https://chrome.google.com/webstore/category/extensions', {
+            waitUntil: 'networkidle0',
+            timeout: 60000
         });
-
-        // 设置视窗大小
-        await page.setViewport({
-            width: 1920,
-            height: 1080
-        });
-        showStatus('浏览器视窗配置完成');
-
-        // 监听浏览器事件
-        browser.on('disconnected', () => {
-            showStatus('浏览器已断开连接，准备重启...', true);
-            setTimeout(startBrowser, 5000);
-        });
-
-        page.on('load', () => {
-            showStatus(`页面加载完成: ${page.url()}`);
-        });
-
-        return { browser, page };
+        console.log('Chrome商店打开成功');
     } catch (error) {
-        showStatus(`浏览器启动失败: ${error.message}`, true);
-        throw error;
+        console.error('打开Chrome商店失败:', error);
     }
+    
+    return browser;
 }
 
-async function startBrowser() {
-    let debugServer = null;
+async function main() {
     let xvfbProcess = null;
     
     try {
+        // 配置代理
+        const proxyConfig = await configureProxy();
+        
+        // 在VPS环境下启动Xvfb
         if (process.env.VPS === 'true') {
             xvfbProcess = startXvfb();
-            debugServer = createDebugServer();
+            console.log('等待Xvfb启动...');
+            await new Promise(resolve => setTimeout(resolve, 3000));
         }
-        
-        showStatus('启动自动化浏览器程序...');
-        const proxyServer = 'http://208.196.127.126:6544';
-        const { browser, page } = await createBrowser(proxyServer);
-        
-        showStatus('浏览器启动成功！');
+
+        const browser = await createBrowser(proxyConfig);
         
         if (process.env.VPS === 'true') {
-            showStatus('VPS远程访问信息：');
-            showStatus('1. 在本地浏览器访问 http://your-vps-ip:9222');
-            showStatus('2. 点击页面上的链接即可远程控制浏览器');
-        } else {
-            showStatus('本地模式运行中');
+            console.log('\n远程访问说明:');
+            console.log('1. 在本地浏览器访问 http://your-vps-ip:9222');
+            console.log('2. 可以看到远程浏览器窗口\n');
         }
         
-        showStatus('正在打开Chrome网上应用店...');
-        await page.goto('https://chrome.google.com/webstore/category/extensions');
-        
-        // 监控页面错误
-        page.on('error', async (err) => {
-            showStatus(`页面发生错误: ${err.message}`, true);
-            await browser.close();
-        });
-        
-        // 监控页面崩溃
-        page.on('crash', async () => {
-            showStatus('页面崩溃，准备重启...', true);
-            await browser.close();
-        });
-
-        // 监控网络状态
-        page.on('requestfailed', request => {
-            showStatus(`请求失败: ${request.url()}`, true);
-        });
+        // 保持程序运行
+        await new Promise(() => {});
         
     } catch (error) {
-        showStatus(`启动失败: ${error.message}，5秒后重试`, true);
-        if (debugServer) {
-            debugServer.close();
-        }
+        console.error('发生错误:', error);
+        // 清理进程
         if (xvfbProcess) {
             xvfbProcess.kill();
         }
-        setTimeout(startBrowser, 5000);
+        // 5秒后重试
+        setTimeout(main, 5000);
     }
 }
 
-// 处理未捕获的异常
-process.on('uncaughtException', (error) => {
-    showStatus(`未捕获的异常: ${error.message}`, true);
-    setTimeout(startBrowser, 5000);
-});
-
-// 处理未处理的Promise拒绝
-process.on('unhandledRejection', (reason) => {
-    showStatus(`未处理的Promise拒绝: ${reason}`, true);
-    setTimeout(startBrowser, 5000);
-});
-
-// 处理进程退出
-process.on('SIGINT', () => {
-    showStatus('收到退出信号，正在关闭程序...');
-    process.exit(0);
-});
-
 // 启动程序
-showStatus('==================================');
-showStatus('       浏览器自动化程序 v1.0      ');
-showStatus('         作者: 小林              ');
-showStatus('  Twitter: @YOYOMYOYOA          ');
-showStatus('==================================');
-startBrowser(); 
+main(); 
