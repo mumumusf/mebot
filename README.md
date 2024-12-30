@@ -137,8 +137,8 @@ sudo yum install -y x11vnc xorg-x11-server-Xvfb
 
 ```bash
 # 克隆项目
-git clone <项目地址>
-cd <项目目录>
+git clone https://github.com/mumumusf/mebot.git
+cd mebot
 
 # 安装依赖
 npm install
