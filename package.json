@@ -1,0 +1,15 @@
+{
+  "name": "browser-proxy-automation",
+  "version": "1.0.0",
+  "description": "Browser automation script with proxy support and noVNC",
+  "main": "browser-proxy.js",
+  "scripts": {
+    "start": "node browser-proxy.js"
+  },
+  "dependencies": {
+    "puppeteer": "^21.5.0",
+    "express": "^4.18.2",
+    "ws": "^8.14.2",
+    "node-pty": "^1.0.0"
+  }
+}
